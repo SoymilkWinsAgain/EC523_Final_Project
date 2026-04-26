@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from .data import PKBatchSampler, make_dataset
 from .losses import supervised_contrastive_loss
 from .metrics import extract_embeddings, retrieval_metrics
 from .model import create_model, save_checkpoint
+from .reporting import save_training_artifacts
 from .utils import load_yaml, resolve_device, set_seed, write_json
 
 
@@ -42,6 +44,12 @@ DEFAULTS: dict[str, Any] = {
     "batches_per_epoch": None,
     "lr": 1e-4,
     "weight_decay": 1e-4,
+    "scheduler": "none",
+    "min_lr": 1e-6,
+    "warmup_epochs": 0,
+    "step_size": 5,
+    "gamma": 0.1,
+    "milestones": None,
     "temperature": 0.07,
     "classification_weight": 0.1,
     "freeze_backbone_epochs": 0,
@@ -80,6 +88,13 @@ def parse_float_triplet(value: str | list[float] | tuple[float, ...]) -> list[fl
     if len(values) != 3:
         raise argparse.ArgumentTypeError("Expected three comma-separated float values.")
     return values
+
+
+def parse_int_csv(value: str | list[int] | None) -> list[int] | None:
+    if value is None or isinstance(value, list):
+        return value
+    values = [int(item.strip()) for item in value.split(",") if item.strip()]
+    return values or None
 
 
 def parse_args() -> argparse.Namespace:
@@ -134,6 +149,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batches-per-epoch", type=int, default=defaults["batches_per_epoch"])
     parser.add_argument("--lr", type=float, default=defaults["lr"])
     parser.add_argument("--weight-decay", type=float, default=defaults["weight_decay"])
+    parser.add_argument(
+        "--scheduler",
+        default=defaults["scheduler"],
+        choices=["none", "cosine", "cosine-warmup", "step", "multistep"],
+        help="Learning-rate scheduler.",
+    )
+    parser.add_argument("--min-lr", type=float, default=defaults["min_lr"], help="Minimum LR for cosine schedules.")
+    parser.add_argument("--warmup-epochs", type=int, default=defaults["warmup_epochs"])
+    parser.add_argument("--step-size", type=int, default=defaults["step_size"], help="StepLR step size in epochs.")
+    parser.add_argument("--gamma", type=float, default=defaults["gamma"], help="StepLR or MultiStepLR decay factor.")
+    parser.add_argument("--milestones", type=parse_int_csv, default=defaults["milestones"], help="Comma-separated MultiStepLR milestones.")
     parser.add_argument("--temperature", type=float, default=defaults["temperature"])
     parser.add_argument("--classification-weight", type=float, default=defaults["classification_weight"])
     parser.add_argument("--freeze-backbone-epochs", type=int, default=defaults["freeze_backbone_epochs"])
@@ -142,6 +168,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=defaults["amp"])
     parser.add_argument("--seed", type=int, default=defaults["seed"])
     return parser.parse_args()
+
+
+def create_scheduler(args: argparse.Namespace, optimizer: torch.optim.Optimizer):
+    scheduler_name = args.scheduler.lower()
+    if scheduler_name == "none":
+        return None
+    if scheduler_name == "step":
+        return torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
+    if scheduler_name == "multistep":
+        milestones = args.milestones or [max(1, int(args.epochs * 0.5)), max(1, int(args.epochs * 0.75))]
+        return torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=args.gamma)
+    if scheduler_name in {"cosine", "cosine-warmup"}:
+        base_lr = args.lr
+        min_factor = args.min_lr / base_lr if base_lr > 0 else 0.0
+        warmup_epochs = args.warmup_epochs if scheduler_name == "cosine-warmup" else 0
+
+        def lr_lambda(epoch_index: int) -> float:
+            epoch_number = epoch_index + 1
+            if warmup_epochs > 0 and epoch_number <= warmup_epochs:
+                return max(epoch_number / warmup_epochs, min_factor)
+            if args.epochs - warmup_epochs <= 1:
+                progress = 1.0
+            else:
+                progress = (epoch_index - warmup_epochs) / (args.epochs - warmup_epochs - 1)
+            progress = min(1.0, max(0.0, progress))
+            cosine_value = 0.5 * (1.0 + math.cos(progress * math.pi))
+            return min_factor + (1.0 - min_factor) * cosine_value
+
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    raise ValueError(f"Unsupported scheduler: {args.scheduler}")
 
 
 def namespace_to_config(args: argparse.Namespace) -> dict[str, Any]:
@@ -164,6 +220,8 @@ def train_one_epoch(
     total_loss = 0.0
     total_contrastive = 0.0
     total_classifier = 0.0
+    correct = 0
+    examples = 0
     batches = 0
 
     for images, labels in tqdm(loader, desc="Train", leave=False):
@@ -177,6 +235,8 @@ def train_one_epoch(
             classifier_loss = torch.zeros((), device=device)
             if classification_weight > 0 and "logits" in outputs:
                 classifier_loss = F.cross_entropy(outputs["logits"], labels)
+                correct += int((outputs["logits"].argmax(dim=1) == labels).sum().detach().cpu())
+                examples += int(labels.numel())
             loss = contrastive_loss + classification_weight * classifier_loss
 
         scaler.scale(loss).backward()
@@ -192,6 +252,7 @@ def train_one_epoch(
         "loss": total_loss / max(1, batches),
         "contrastive_loss": total_contrastive / max(1, batches),
         "classifier_loss": total_classifier / max(1, batches),
+        "accuracy": correct / examples if examples else 0.0,
     }
 
 
@@ -206,6 +267,7 @@ def run_training(args: argparse.Namespace) -> None:
     args.lora_target_modules = parse_optional_csv(args.lora_target_modules)
     args.image_mean = parse_float_triplet(args.image_mean)
     args.image_std = parse_float_triplet(args.image_std)
+    args.milestones = parse_int_csv(args.milestones)
     set_seed(args.seed)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -280,6 +342,7 @@ def run_training(args: argparse.Namespace) -> None:
     print(json.dumps({"trainable_parameters": trainable_count, "total_parameters": total_count}, sort_keys=True))
 
     optimizer = torch.optim.AdamW(trainable_parameters, lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = create_scheduler(args, optimizer)
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
     run_config = namespace_to_config(args)
 
@@ -291,6 +354,7 @@ def run_training(args: argparse.Namespace) -> None:
 
     for epoch in range(1, args.epochs + 1):
         model.set_backbone_trainable(epoch > args.freeze_backbone_epochs)
+        current_lr = float(optimizer.param_groups[0]["lr"])
         train_metrics = train_one_epoch(
             model=model,
             loader=train_loader,
@@ -302,7 +366,7 @@ def run_training(args: argparse.Namespace) -> None:
             amp_enabled=args.amp and device.type == "cuda",
         )
 
-        metrics: dict[str, float] = {f"train/{key}": value for key, value in train_metrics.items()}
+        metrics: dict[str, float] = {"lr": current_lr, **{f"train/{key}": value for key, value in train_metrics.items()}}
         if val_dataset is not None:
             val_metrics = evaluate(model, val_dataset, workers=args.workers, device=device)
             metrics.update({f"val/{key}": value for key, value in val_metrics.items()})
@@ -317,7 +381,9 @@ def run_training(args: argparse.Namespace) -> None:
         if score > best_score:
             best_score = score
             save_checkpoint(output_dir / "best.pt", model, epoch, metrics, train_dataset.class_to_idx, run_config)
-        write_json(output_dir / "history.json", history)
+        if scheduler is not None:
+            scheduler.step()
+        save_training_artifacts(output_dir, history)
 
 
 def main() -> None:

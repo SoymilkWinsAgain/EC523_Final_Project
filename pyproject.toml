@@ -7,6 +7,7 @@ dependencies = [
   "accelerate",
   "faiss-cpu",
   "huggingface-hub",
+  "matplotlib",
   "numpy",
   "peft",
   "pillow",

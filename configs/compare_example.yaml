@@ -1,0 +1,27 @@
+dataset:
+  query_manifest: data/manifests/danbooru/test.jsonl
+  gallery_manifest: data/manifests/danbooru/all.jsonl
+
+top_k: [1, 5, 10]
+batch_size: 64
+workers: 8
+device: auto
+output_dir: artifacts/evaluations/example
+
+models:
+  - name: google_vit_raw
+    type: raw
+    backbone_backend: hf-transformers
+    model_name: google/vit-base-patch16-224-in21k
+    pretrained: true
+    image_size: 224
+    image_mean: [0.5, 0.5, 0.5]
+    image_std: [0.5, 0.5, 0.5]
+
+  - name: fine_tuned_vit
+    type: checkpoint
+    checkpoint: runs/hf_vit_lora/best.pt
+
+  - name: scratch_vit
+    type: checkpoint
+    checkpoint: runs/scratch_vit/best.pt

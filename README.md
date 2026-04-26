@@ -100,6 +100,24 @@ conda run -n jigsaw python scripts/train.py \
 ```
 
 The training script saves `last.pt`, `best.pt`, `config.json`, and `class_to_idx.json` in the output directory.
+It also writes report-ready artifacts:
+
+- `history.json`
+- `metrics.csv`
+- `curves/loss.png`
+- `curves/accuracy.png`
+- `curves/retrieval.png`
+- `curves/lr.png`
+
+Scheduler options include `none`, `cosine`, `cosine-warmup`, `step`, and `multistep`:
+
+```bash
+conda run -n jigsaw python scripts/train.py \
+  --config configs/default.yaml \
+  --scheduler cosine-warmup \
+  --warmup-epochs 2 \
+  --min-lr 0.000001
+```
 
 Manifest-based Danbooru training:
 
@@ -111,6 +129,7 @@ conda run -n jigsaw python scripts/train.py \
 ```
 
 Full fine-tuning can be selected with `--finetune-mode full`. LoRA fine-tuning can be selected with `--finetune-mode lora --lora-r 8 --lora-alpha 16 --lora-target-modules query,value`.
+From-scratch training can be run with `--no-pretrained` or `configs/scratch_vit.yaml`.
 
 ## Hugging Face Backbones
 
@@ -174,6 +193,42 @@ conda run -n jigsaw python scripts/query.py \
   --image /path/to/query.jpg \
   --top-k 5
 ```
+
+## Compare Raw, Fine-Tuned, and Scratch Models
+
+Use `scripts/evaluate.py` to run the same retrieval protocol across multiple model variants:
+
+```bash
+conda run -n jigsaw python scripts/evaluate.py \
+  --spec configs/compare_example.yaml
+```
+
+The comparison spec can include raw Hugging Face backbones, fine-tuned checkpoints, and from-scratch checkpoints:
+
+```yaml
+dataset:
+  query_manifest: data/manifests/danbooru/test.jsonl
+  gallery_manifest: data/manifests/danbooru/all.jsonl
+
+models:
+  - name: google_vit_raw
+    type: raw
+    backbone_backend: hf-transformers
+    model_name: google/vit-base-patch16-224-in21k
+    pretrained: true
+    image_mean: [0.5, 0.5, 0.5]
+    image_std: [0.5, 0.5, 0.5]
+
+  - name: fine_tuned_vit
+    type: checkpoint
+    checkpoint: runs/hf_vit_lora/best.pt
+
+  - name: scratch_vit
+    type: checkpoint
+    checkpoint: runs/scratch_vit/best.pt
+```
+
+Outputs are written as `comparison_metrics.json` and `comparison_metrics.csv` when `output_dir` is set.
 
 ## Run the Local Web UI
 
