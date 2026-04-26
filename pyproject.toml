@@ -1,0 +1,19 @@
+[project]
+name = "who-is-this-anime-girl"
+version = "0.1.0"
+description = "Anime character retrieval with contrastive image embeddings."
+requires-python = ">=3.10"
+dependencies = [
+  "faiss-cpu",
+  "numpy",
+  "pillow",
+  "pyyaml",
+  "scikit-learn",
+  "timm",
+  "torch",
+  "torchvision",
+  "tqdm",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,24 @@
+train_dir: data/train
+val_dir: data/val
+output_dir: runs/vit_baseline
+
+model_name: vit_base_patch16_224
+pretrained: true
+image_size: 224
+embedding_dim: 256
+projection_hidden_dim: 512
+
+epochs: 10
+identities_per_batch: 8
+samples_per_identity: 4
+batches_per_epoch: null
+lr: 0.0001
+weight_decay: 0.0001
+temperature: 0.07
+classification_weight: 0.1
+freeze_backbone_epochs: 0
+
+workers: 4
+device: auto
+amp: true
+seed: 523

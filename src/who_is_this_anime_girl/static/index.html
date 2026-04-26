@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Who Is This Anime Girl</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>Who Is This Anime Girl</h1>
+          <p id="statusText">Checking model and gallery status...</p>
+        </div>
+        <button id="refreshStatus" type="button">Refresh</button>
+      </header>
+
+      <section class="workspace">
+        <form id="enrollForm" class="panel">
+          <h2>Enroll Character Images</h2>
+          <label>
+            Character identity
+            <input name="identity" type="text" placeholder="hatsune_miku" required />
+          </label>
+          <label>
+            Gallery images
+            <input name="images" type="file" accept="image/*" multiple required />
+          </label>
+          <div class="actions">
+            <button type="submit">Add to Gallery</button>
+            <button id="rebuildIndex" type="button">Rebuild Index</button>
+          </div>
+          <p id="enrollResult" class="result"></p>
+        </form>
+
+        <form id="queryForm" class="panel">
+          <h2>Query Image</h2>
+          <label>
+            Unknown image
+            <input name="image" type="file" accept="image/*" required />
+          </label>
+          <label>
+            Results
+            <input name="top_k" type="number" min="1" max="20" value="5" />
+          </label>
+          <button type="submit">Search</button>
+          <p id="queryResult" class="result"></p>
+        </form>
+      </section>
+
+      <section class="results-shell">
+        <div class="panel">
+          <h2>Gallery</h2>
+          <div id="identityList" class="identity-list"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Matches</h2>
+          <div id="matches" class="matches"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
