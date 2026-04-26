@@ -26,8 +26,15 @@ def load_faiss_index(index_dir: str | Path):
 
 
 @torch.no_grad()
-def encode_image(model: torch.nn.Module, image: Image.Image, image_size: int, device: torch.device) -> np.ndarray:
-    tensor = tensor_from_pil(image, image_size=image_size).unsqueeze(0).to(device)
+def encode_image(
+    model: torch.nn.Module,
+    image: Image.Image,
+    image_size: int,
+    image_mean: list[float],
+    image_std: list[float],
+    device: torch.device,
+) -> np.ndarray:
+    tensor = tensor_from_pil(image, image_size=image_size, mean=image_mean, std=image_std).unsqueeze(0).to(device)
     embedding = model(tensor)["embedding"].detach().cpu().numpy().astype("float32")
     embedding /= np.linalg.norm(embedding, axis=1, keepdims=True).clip(min=1e-12)
     return embedding
@@ -59,7 +66,14 @@ def search_image(
     model, _ = load_checkpoint(checkpoint_path, map_location=torch_device)
     model.to(torch_device)
 
-    query = encode_image(model, image.convert("RGB"), image_size=int(metadata["image_size"]), device=torch_device)
+    query = encode_image(
+        model,
+        image.convert("RGB"),
+        image_size=int(metadata["image_size"]),
+        image_mean=metadata.get("image_mean", [0.485, 0.456, 0.406]),
+        image_std=metadata.get("image_std", [0.229, 0.224, 0.225]),
+        device=torch_device,
+    )
     search_k = min(max(top_k * 5, top_k), faiss_index.ntotal)
     scores, indices = faiss_index.search(query, search_k)
 

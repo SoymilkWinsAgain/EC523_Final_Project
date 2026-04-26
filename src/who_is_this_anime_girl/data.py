@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import json
 import random
 from collections import defaultdict
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Any, Iterator, Sequence
 
 import torch
 from PIL import Image
-from torch.utils.data import Sampler
+from torch.utils.data import Dataset, Sampler
 from torchvision import datasets, transforms
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 
-def make_transforms(image_size: int, train: bool) -> transforms.Compose:
+def make_transforms(
+    image_size: int,
+    train: bool,
+    mean: Sequence[float] = (0.485, 0.456, 0.406),
+    std: Sequence[float] = (0.229, 0.224, 0.225),
+) -> transforms.Compose:
     if train:
         return transforms.Compose(
             [
@@ -22,14 +28,14 @@ def make_transforms(image_size: int, train: bool) -> transforms.Compose:
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.02),
                 transforms.ToTensor(),
-                transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+                transforms.Normalize(mean=tuple(mean), std=tuple(std)),
             ]
         )
     return transforms.Compose(
         [
             transforms.Resize((image_size, image_size)),
             transforms.ToTensor(),
-            transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            transforms.Normalize(mean=tuple(mean), std=tuple(std)),
         ]
     )
 
@@ -39,14 +45,82 @@ def load_rgb_image(path: str | Path) -> Image.Image:
         return image.convert("RGB")
 
 
-def make_image_folder(root: str | Path, image_size: int, train: bool) -> datasets.ImageFolder:
+def make_image_folder(
+    root: str | Path,
+    image_size: int,
+    train: bool,
+    mean: Sequence[float] = (0.485, 0.456, 0.406),
+    std: Sequence[float] = (0.229, 0.224, 0.225),
+) -> datasets.ImageFolder:
     root = Path(root)
     if not root.exists():
         raise FileNotFoundError(f"Dataset directory does not exist: {root}")
-    dataset = datasets.ImageFolder(root=str(root), transform=make_transforms(image_size, train=train))
+    dataset = datasets.ImageFolder(root=str(root), transform=make_transforms(image_size, train=train, mean=mean, std=std))
     if not dataset.samples:
         raise ValueError(f"No images found in dataset directory: {root}")
     return dataset
+
+
+def load_manifest(path: str | Path) -> list[dict[str, Any]]:
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Manifest does not exist: {path}")
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            if "path" not in record or "identity" not in record:
+                raise ValueError(f"Manifest line {line_number} must contain path and identity fields.")
+            records.append(record)
+    if not records:
+        raise ValueError(f"Manifest is empty: {path}")
+    return records
+
+
+class ManifestImageDataset(Dataset):
+    def __init__(
+        self,
+        manifest_path: str | Path,
+        image_size: int,
+        train: bool,
+        mean: Sequence[float] = (0.485, 0.456, 0.406),
+        std: Sequence[float] = (0.229, 0.224, 0.225),
+    ) -> None:
+        self.manifest_path = Path(manifest_path)
+        self.records = load_manifest(self.manifest_path)
+        self.transform = make_transforms(image_size, train=train, mean=mean, std=std)
+
+        identities = sorted({str(record["identity"]) for record in self.records})
+        self.classes = identities
+        self.class_to_idx = {identity: index for index, identity in enumerate(identities)}
+        self.samples = [(str(Path(record["path"])), self.class_to_idx[str(record["identity"])]) for record in self.records]
+        self.targets = [label for _, label in self.samples]
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
+        path, label = self.samples[index]
+        image = load_rgb_image(path)
+        return self.transform(image), label
+
+
+def make_dataset(
+    root: str | Path | None,
+    manifest: str | Path | None,
+    image_size: int,
+    train: bool,
+    mean: Sequence[float] = (0.485, 0.456, 0.406),
+    std: Sequence[float] = (0.229, 0.224, 0.225),
+) -> datasets.ImageFolder | ManifestImageDataset:
+    if manifest:
+        return ManifestImageDataset(manifest, image_size=image_size, train=train, mean=mean, std=std)
+    if not root:
+        raise ValueError("Either a dataset directory or a manifest path must be provided.")
+    return make_image_folder(root, image_size=image_size, train=train, mean=mean, std=std)
 
 
 class PKBatchSampler(Sampler[list[int]]):
@@ -104,8 +178,13 @@ class PKBatchSampler(Sampler[list[int]]):
         return self.batches_per_epoch
 
 
-def tensor_from_pil(image: Image.Image, image_size: int) -> torch.Tensor:
-    transform = make_transforms(image_size, train=False)
+def tensor_from_pil(
+    image: Image.Image,
+    image_size: int,
+    mean: Sequence[float] = (0.485, 0.456, 0.406),
+    std: Sequence[float] = (0.229, 0.224, 0.225),
+) -> torch.Tensor:
+    transform = make_transforms(image_size, train=False, mean=mean, std=std)
     return transform(image.convert("RGB"))
 
 

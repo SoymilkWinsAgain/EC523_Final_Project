@@ -1,34 +1,29 @@
-train_dir: data/train
-val_dir: data/val
-output_dir: runs/vit_baseline
+train_manifest: data/manifests/danbooru/train.jsonl
+val_manifest: data/manifests/danbooru/val.jsonl
+output_dir: runs/uni_full
 
-model_name: vit_base_patch16_224
-backbone_backend: timm
+backbone_backend: hf-timm
+model_name: hf-hub:MahmoodLab/UNI
 pretrained: true
 trust_remote_code: false
-timm_kwargs: {}
-finetune_mode: full
-lora_r: 8
-lora_alpha: 16
-lora_dropout: 0.05
-lora_target_modules: null
+timm_kwargs:
+  init_values: 0.00001
+  dynamic_img_size: true
 image_size: 224
 image_mean: [0.485, 0.456, 0.406]
 image_std: [0.229, 0.224, 0.225]
 embedding_dim: 256
 projection_hidden_dim: 512
 
+finetune_mode: full
 epochs: 10
 identities_per_batch: 8
 samples_per_identity: 4
-batches_per_epoch: null
-lr: 0.0001
+lr: 0.00002
 weight_decay: 0.0001
 temperature: 0.07
 classification_weight: 0.1
-freeze_backbone_epochs: 0
-
-workers: 4
+workers: 8
 device: auto
 amp: true
 seed: 523

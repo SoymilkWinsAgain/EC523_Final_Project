@@ -6,9 +6,10 @@ This repository implements an image-only anime character retrieval system. It tr
 
 - Python environment: `jigsaw`
 - Modeling: PyTorch, torchvision, timm
+- Hugging Face loading: transformers, huggingface_hub, peft
 - Retrieval: FAISS with cosine similarity through normalized embeddings
 - Web UI: Python standard library HTTP server plus static HTML/CSS/JavaScript
-- Dataset format: folder-per-identity image directories compatible with `torchvision.datasets.ImageFolder`
+- Dataset format: ImageFolder directories or JSONL manifests aligned with Danbooru2021 bucketed files
 
 ## Project Layout
 
@@ -24,7 +25,7 @@ project_report/                  Project report PDF
 
 ## Dataset Layout
 
-Training and gallery directories use identity names as subdirectories:
+Small local experiments can use identity names as subdirectories:
 
 ```text
 data/train/
@@ -42,6 +43,34 @@ data/val/
 ```
 
 For retrieval, `data/gallery/` uses the same layout.
+
+Danbooru2021-scale experiments should use manifests instead of copying images into class folders. The expected manifest row format is:
+
+```json
+{"path": "/datasets/danbooru2021/512px/0001/1001.jpg", "identity": "character_name", "danbooru_id": 1001, "rating": "s"}
+```
+
+Danbooru2021 stores images in modulo buckets. For image ID `1001`, the bucket is `0001` because `1001 % 1000 == 1`, so the 512px path is `512px/0001/1001.jpg`.
+
+## Prepare Danbooru2021 Manifests
+
+Do not download the full dataset into this repository. Point the script at an existing SCC or external dataset location:
+
+```bash
+conda run -n jigsaw python scripts/prepare_danbooru.py \
+  --metadata /path/to/metadata.json.tar.xz \
+  --image-root /path/to/danbooru2021 \
+  --image-subdir 512px \
+  --output-dir data/manifests/danbooru \
+  --ratings s \
+  --single-character-only \
+  --min-images-per-identity 20 \
+  --max-images-per-identity 500 \
+  --max-identities 1000 \
+  --require-image-exists
+```
+
+The script writes `train.jsonl`, `val.jsonl`, `test.jsonl`, `all.jsonl`, and `summary.json`. Use `--limit-records` for fast dry runs on a small metadata slice.
 
 ## Train an Embedding Model
 
@@ -72,6 +101,52 @@ conda run -n jigsaw python scripts/train.py \
 
 The training script saves `last.pt`, `best.pt`, `config.json`, and `class_to_idx.json` in the output directory.
 
+Manifest-based Danbooru training:
+
+```bash
+conda run -n jigsaw python scripts/train.py \
+  --config configs/hf_vit_lora.yaml \
+  --train-manifest data/manifests/danbooru/train.jsonl \
+  --val-manifest data/manifests/danbooru/val.jsonl
+```
+
+Full fine-tuning can be selected with `--finetune-mode full`. LoRA fine-tuning can be selected with `--finetune-mode lora --lora-r 8 --lora-alpha 16 --lora-target-modules query,value`.
+
+## Hugging Face Backbones
+
+Supported loader backends:
+
+- `--backbone-backend hf-transformers` for model IDs that work with `transformers.AutoModel`, such as `google/vit-base-patch16-224-in21k` and DINOv3 ViT checkpoints.
+- `--backbone-backend hf-timm` for timm models hosted on Hugging Face, such as `hf-hub:MahmoodLab/UNI`.
+- `--backbone-backend timm` for normal timm model names.
+
+Examples:
+
+```bash
+conda run -n jigsaw python scripts/train.py \
+  --config configs/dinov3_lora.yaml \
+  --train-manifest data/manifests/danbooru/train.jsonl \
+  --val-manifest data/manifests/danbooru/val.jsonl
+
+conda run -n jigsaw python scripts/train.py \
+  --config configs/uni_full.yaml \
+  --train-manifest data/manifests/danbooru/train.jsonl \
+  --val-manifest data/manifests/danbooru/val.jsonl
+```
+
+Some Hugging Face models are gated. Authenticate with `huggingface-cli login` or set `HF_TOKEN` before running. UNI requires accepting its access terms. DINOv3 models may also require access approval depending on the checkpoint.
+
+LVFace is distributed on Hugging Face as project-specific `.pt` and `.onnx` artifacts rather than a standard timm or transformers model. Use the downloader to fetch selected files without downloading the whole repository:
+
+```bash
+conda run -n jigsaw python scripts/download_hf.py \
+  --repo-id bytedance-research/LVFace \
+  --filename LVFace-B_Glint360K/LVFace-B_Glint360K.pt \
+  --output-dir artifacts/hf_models/lvface
+```
+
+Fine-tuning LVFace requires the upstream LVFace architecture code. The current training pipeline supports full and LoRA fine-tuning for timm and transformers backbones.
+
 ## Build a Gallery Index
 
 ```bash
@@ -79,6 +154,15 @@ conda run -n jigsaw python scripts/build_index.py \
   --checkpoint runs/vit_baseline/best.pt \
   --gallery-dir data/gallery \
   --output-dir artifacts/gallery_index
+```
+
+Manifest-based gallery indexing:
+
+```bash
+conda run -n jigsaw python scripts/build_index.py \
+  --checkpoint runs/hf_vit_lora/best.pt \
+  --gallery-manifest data/manifests/danbooru/all.jsonl \
+  --output-dir artifacts/danbooru_index
 ```
 
 ## Query from the Command Line
@@ -106,6 +190,6 @@ Open `http://127.0.0.1:8000` in a browser. The UI can enroll gallery images, reb
 
 ## Notes
 
-- The default model is `vit_base_patch16_224`, but any timm backbone with `num_classes=0` support can be used.
-- DINO, LVFace, ViT, and UNI experiments can be represented as different `--model-name` values and run directories.
+- The default model is `vit_base_patch16_224`, but timm, Hugging Face Transformers, and Hugging Face-hosted timm backbones are supported.
+- DINOv3, ViT, and UNI experiments can be represented as config presets and run directories.
 - The system compares identities by nearest-neighbor retrieval rather than closed-set classification, so new gallery identities can be added by rebuilding the index.

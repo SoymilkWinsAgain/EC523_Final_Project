@@ -157,6 +157,7 @@ class AnimeGirlHandler(BaseHTTPRequestHandler):
         metadata = build_gallery_index(
             checkpoint_path=self.checkpoint_path,
             gallery_dir=self.gallery_dir,
+            gallery_manifest=None,
             output_dir=self.index_dir,
             workers=self.workers,
             device=self.device,

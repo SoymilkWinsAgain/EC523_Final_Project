@@ -1,0 +1,9 @@
+repo_id: bytedance-research/LVFace
+recommended_files:
+  - LVFace-B_Glint360K/LVFace-B_Glint360K.onnx
+  - LVFace-B_Glint360K/LVFace-B_Glint360K.pt
+
+notes:
+  - LVFace is distributed as project-specific ONNX and PyTorch weights.
+  - Use scripts/download_hf.py to fetch selected artifacts.
+  - Fine-tuning requires the official LVFace architecture code from the upstream repository.

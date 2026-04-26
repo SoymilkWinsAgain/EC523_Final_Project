@@ -4,8 +4,11 @@ version = "0.1.0"
 description = "Anime character retrieval with contrastive image embeddings."
 requires-python = ">=3.10"
 dependencies = [
+  "accelerate",
   "faiss-cpu",
+  "huggingface-hub",
   "numpy",
+  "peft",
   "pillow",
   "pyyaml",
   "scikit-learn",
@@ -13,6 +16,7 @@ dependencies = [
   "torch",
   "torchvision",
   "tqdm",
+  "transformers",
 ]
 
 [tool.setuptools.packages.find]

@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .data import PKBatchSampler, make_image_folder
+from .data import PKBatchSampler, make_dataset
 from .losses import supervised_contrastive_loss
 from .metrics import extract_embeddings, retrieval_metrics
 from .model import create_model, save_checkpoint
@@ -21,9 +21,19 @@ DEFAULTS: dict[str, Any] = {
     "train_dir": "data/train",
     "val_dir": None,
     "output_dir": "runs/vit_baseline",
+    "backbone_backend": "timm",
     "model_name": "vit_base_patch16_224",
     "pretrained": True,
+    "trust_remote_code": False,
+    "timm_kwargs": {},
+    "finetune_mode": "full",
+    "lora_r": 8,
+    "lora_alpha": 16,
+    "lora_dropout": 0.05,
+    "lora_target_modules": None,
     "image_size": 224,
+    "image_mean": [0.485, 0.456, 0.406],
+    "image_std": [0.229, 0.224, 0.225],
     "embedding_dim": 256,
     "projection_hidden_dim": 512,
     "epochs": 10,
@@ -42,6 +52,36 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
+def parse_json_mapping(value: str | dict[str, Any] | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("Expected a JSON object.")
+    return parsed
+
+
+def parse_optional_csv(value: str | list[str] | None) -> list[str] | None:
+    if value is None or isinstance(value, list):
+        return value
+    cleaned = [item.strip() for item in value.split(",") if item.strip()]
+    return cleaned or None
+
+
+def parse_float_triplet(value: str | list[float] | tuple[float, ...]) -> list[float]:
+    if isinstance(value, (list, tuple)):
+        values = [float(item) for item in value]
+    else:
+        values = [float(item.strip()) for item in value.split(",") if item.strip()]
+    if len(values) != 3:
+        raise argparse.ArgumentTypeError("Expected three comma-separated float values.")
+    return values
+
+
 def parse_args() -> argparse.Namespace:
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--config", default=None, help="Optional YAML config path.")
@@ -53,11 +93,39 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(parents=[pre_parser], description="Train an anime character embedding model.")
     parser.add_argument("--train-dir", default=defaults["train_dir"], help="ImageFolder training directory.")
+    parser.add_argument("--train-manifest", default=defaults.get("train_manifest"), help="JSONL training manifest.")
     parser.add_argument("--val-dir", default=defaults["val_dir"], help="Optional ImageFolder validation directory.")
+    parser.add_argument("--val-manifest", default=defaults.get("val_manifest"), help="Optional JSONL validation manifest.")
     parser.add_argument("--output-dir", default=defaults["output_dir"], help="Directory for checkpoints and logs.")
-    parser.add_argument("--model-name", default=defaults["model_name"], help="timm model name.")
+    parser.add_argument(
+        "--backbone-backend",
+        default=defaults["backbone_backend"],
+        choices=["timm", "hf-timm", "hf-transformers", "transformers", "lvface"],
+        help="Backbone loader backend.",
+    )
+    parser.add_argument("--model-name", default=defaults["model_name"], help="timm model name or Hugging Face model ID.")
     parser.add_argument("--pretrained", action=argparse.BooleanOptionalAction, default=defaults["pretrained"])
+    parser.add_argument("--trust-remote-code", action=argparse.BooleanOptionalAction, default=defaults["trust_remote_code"])
+    parser.add_argument("--hf-token", default=None, help="Optional Hugging Face token. Prefer HF_TOKEN in the environment.")
+    parser.add_argument("--timm-kwargs", type=parse_json_mapping, default=defaults["timm_kwargs"], help="JSON kwargs for timm.create_model.")
+    parser.add_argument(
+        "--finetune-mode",
+        default=defaults["finetune_mode"],
+        choices=["full", "projection", "frozen", "lora"],
+        help="Which parameters to train.",
+    )
+    parser.add_argument("--lora-r", type=int, default=defaults["lora_r"])
+    parser.add_argument("--lora-alpha", type=int, default=defaults["lora_alpha"])
+    parser.add_argument("--lora-dropout", type=float, default=defaults["lora_dropout"])
+    parser.add_argument(
+        "--lora-target-modules",
+        type=parse_optional_csv,
+        default=defaults["lora_target_modules"],
+        help="Comma-separated module name fragments for LoRA.",
+    )
     parser.add_argument("--image-size", type=int, default=defaults["image_size"])
+    parser.add_argument("--image-mean", type=parse_float_triplet, default=defaults["image_mean"])
+    parser.add_argument("--image-std", type=parse_float_triplet, default=defaults["image_std"])
     parser.add_argument("--embedding-dim", type=int, default=defaults["embedding_dim"])
     parser.add_argument("--projection-hidden-dim", type=int, default=defaults["projection_hidden_dim"])
     parser.add_argument("--epochs", type=int, default=defaults["epochs"])
@@ -78,6 +146,7 @@ def parse_args() -> argparse.Namespace:
 
 def namespace_to_config(args: argparse.Namespace) -> dict[str, Any]:
     config = vars(args).copy()
+    config.pop("hf_token", None)
     return {key: str(value) if isinstance(value, Path) else value for key, value in config.items()}
 
 
@@ -133,17 +202,44 @@ def evaluate(model: torch.nn.Module, dataset, workers: int, device: torch.device
 
 
 def run_training(args: argparse.Namespace) -> None:
+    args.timm_kwargs = parse_json_mapping(args.timm_kwargs)
+    args.lora_target_modules = parse_optional_csv(args.lora_target_modules)
+    args.image_mean = parse_float_triplet(args.image_mean)
+    args.image_std = parse_float_triplet(args.image_std)
     set_seed(args.seed)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     device = resolve_device(args.device)
-    train_dataset = make_image_folder(args.train_dir, image_size=args.image_size, train=True)
+    train_dataset = make_dataset(
+        args.train_dir,
+        args.train_manifest,
+        image_size=args.image_size,
+        train=True,
+        mean=args.image_mean,
+        std=args.image_std,
+    )
     val_dataset = None
-    if args.val_dir:
+    if args.val_manifest:
+        val_dataset = make_dataset(
+            None,
+            args.val_manifest,
+            image_size=args.image_size,
+            train=False,
+            mean=args.image_mean,
+            std=args.image_std,
+        )
+    elif args.val_dir:
         val_path = Path(args.val_dir)
         if val_path.exists():
-            val_dataset = make_image_folder(val_path, image_size=args.image_size, train=False)
+            val_dataset = make_dataset(
+                val_path,
+                None,
+                image_size=args.image_size,
+                train=False,
+                mean=args.image_mean,
+                std=args.image_std,
+            )
 
     sampler = PKBatchSampler(
         train_dataset.targets,
@@ -161,14 +257,29 @@ def run_training(args: argparse.Namespace) -> None:
 
     num_classes = len(train_dataset.classes) if args.classification_weight > 0 else None
     model = create_model(
+        backbone_backend=args.backbone_backend,
         model_name=args.model_name,
         pretrained=args.pretrained,
         embedding_dim=args.embedding_dim,
         projection_hidden_dim=args.projection_hidden_dim,
         num_classes=num_classes,
+        trust_remote_code=args.trust_remote_code,
+        timm_kwargs=args.timm_kwargs,
+        finetune_mode=args.finetune_mode,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        lora_target_modules=args.lora_target_modules,
+        hf_token=args.hf_token,
     ).to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    if not trainable_parameters:
+        raise ValueError("No trainable parameters are available for the selected fine-tuning mode.")
+    trainable_count, total_count = model.trainable_parameter_count()
+    print(json.dumps({"trainable_parameters": trainable_count, "total_parameters": total_count}, sort_keys=True))
+
+    optimizer = torch.optim.AdamW(trainable_parameters, lr=args.lr, weight_decay=args.weight_decay)
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
     run_config = namespace_to_config(args)
 
