@@ -68,14 +68,23 @@ def save_training_artifacts(output_dir: str | Path, history: list[dict[str, Any]
     plot_metric_group(
         rows,
         output_dir / "curves" / "loss.png",
-        ["train/loss", "train/contrastive_loss", "train/classifier_loss"],
+        ["train/loss", "train/contrastive_loss", "train/classifier_loss", "train/image_text_loss"],
         "Training Loss",
         "Loss",
     )
     plot_metric_group(
         rows,
         output_dir / "curves" / "retrieval.png",
-        ["val/recall@1", "val/recall@5", "val/recall@10", "val/mrr"],
+        [
+            "val/recall@1",
+            "val/recall@5",
+            "val/recall@10",
+            "val/mrr",
+            "val/text_to_image_recall@1",
+            "val/text_to_image_recall@5",
+            "val/text_to_image_recall@10",
+            "val/text_to_image_mrr",
+        ],
         "Validation Retrieval Metrics",
         "Score",
     )
@@ -86,4 +95,4 @@ def save_training_artifacts(output_dir: str | Path, history: list[dict[str, Any]
         "Accuracy and Recall",
         "Score",
     )
-    plot_metric_group(rows, output_dir / "curves" / "lr.png", ["lr"], "Learning Rate", "LR")
+    plot_metric_group(rows, output_dir / "curves" / "lr.png", ["lr", "train/logit_scale"], "Learning Rate", "LR")

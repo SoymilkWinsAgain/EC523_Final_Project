@@ -13,6 +13,7 @@ from urllib.parse import unquote, urlparse
 from PIL import Image
 
 from .data import count_images_by_identity
+from .devise import TEXT_MODEL_NAME, build_devise_gallery_index, is_devise_checkpoint
 from .index import build_gallery_index
 from .infer import CachedGallerySearcher
 
@@ -52,7 +53,11 @@ class AnimeGirlHandler(BaseHTTPRequestHandler):
     checkpoint_path: Path
     gallery_dir: Path
     index_dir: Path
+    text_index_dir: Path
     device: str
+    text_model_name: str
+    text_embedding_dim: int
+    text_device: str
     workers: int
     searcher: CachedGallerySearcher | None = None
 
@@ -115,6 +120,8 @@ class AnimeGirlHandler(BaseHTTPRequestHandler):
                 self.handle_rebuild()
             elif route == "/api/query":
                 self.handle_query()
+            elif route == "/api/query_text":
+                self.handle_query_text()
             else:
                 self.send_error(404)
         except Exception as exc:
@@ -137,10 +144,15 @@ class AnimeGirlHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "checkpoint_exists": self.checkpoint_path.exists(),
                 "index_exists": (self.index_dir / "gallery.faiss").exists() and (self.index_dir / "metadata.json").exists(),
+                "text_index_exists": (self.text_index_dir / "gallery.faiss").exists() and (self.text_index_dir / "metadata.json").exists(),
                 "checkpoint": str(self.checkpoint_path),
                 "gallery_dir": str(self.gallery_dir),
                 "index_dir": str(self.index_dir),
+                "text_index_dir": str(self.text_index_dir),
                 "searcher_cached": self.__class__.searcher is not None,
+                "text_query_enabled": (self.text_index_dir / "gallery.faiss").exists() and (self.text_index_dir / "metadata.json").exists(),
+                "text_model": self.text_model_name,
+                "text_embedding_dim": self.text_embedding_dim,
                 "identities": count_images_by_identity(self.gallery_dir),
             }
         )
@@ -181,12 +193,41 @@ class AnimeGirlHandler(BaseHTTPRequestHandler):
             workers=self.workers,
             device=self.device,
         )
+        text_metadata = None
+        if is_devise_checkpoint(self.checkpoint_path):
+            if self.text_index_dir.resolve() == self.index_dir.resolve():
+                self.send_json(
+                    {
+                        "ok": False,
+                        "error": "DeViSE image queries and text queries require separate image-space and text-space index directories.",
+                    },
+                    status=400,
+                )
+                return
+            text_metadata = build_devise_gallery_index(
+                checkpoint_path=self.checkpoint_path,
+                gallery_dir=self.gallery_dir,
+                gallery_manifest=None,
+                output_dir=self.text_index_dir,
+                workers=self.workers,
+                device=self.device,
+            )
         self.__class__.searcher = CachedGallerySearcher(
             checkpoint_path=self.checkpoint_path,
             index_dir=self.index_dir,
             device=self.device,
+            text_index_dir=self.text_index_dir,
+            text_model_name=self.text_model_name,
+            text_embedding_dim=self.text_embedding_dim,
+            text_device=self.text_device,
         )
-        self.send_json({"ok": True, "indexed_images": len(metadata["items"])})
+        self.send_json(
+            {
+                "ok": True,
+                "indexed_images": len(metadata["items"]),
+                "text_indexed_images": len(text_metadata["items"]) if text_metadata else None,
+            }
+        )
 
     def handle_query(self) -> None:
         form = self.parse_form()
@@ -208,6 +249,10 @@ class AnimeGirlHandler(BaseHTTPRequestHandler):
                 checkpoint_path=self.checkpoint_path,
                 index_dir=self.index_dir,
                 device=self.device,
+                text_index_dir=self.text_index_dir,
+                text_model_name=self.text_model_name,
+                text_embedding_dim=self.text_embedding_dim,
+                text_device=self.text_device,
             )
         matches = self.__class__.searcher.search_bytes(image_bytes, top_k=top_k)
         gallery_root = self.gallery_dir.resolve()
@@ -217,25 +262,66 @@ class AnimeGirlHandler(BaseHTTPRequestHandler):
                 match["gallery_url"] = gallery_url
         self.send_json({"ok": True, "matches": matches})
 
+    def handle_query_text(self) -> None:
+        form = self.parse_form()
+        query = str(form.getfirst("query", "")).strip()
+        if not query:
+            self.send_json({"ok": False, "error": "No text query was provided."}, status=400)
+            return
+        if not self.checkpoint_path.exists():
+            self.send_json({"ok": False, "error": "Checkpoint does not exist."}, status=400)
+            return
+        if not (self.text_index_dir / "gallery.faiss").exists():
+            self.send_json({"ok": False, "error": "Text gallery index does not exist. Rebuild the index first."}, status=400)
+            return
+
+        top_k = int(form.getfirst("top_k", "5"))
+        if self.__class__.searcher is None:
+            self.__class__.searcher = CachedGallerySearcher(
+                checkpoint_path=self.checkpoint_path,
+                index_dir=self.index_dir,
+                device=self.device,
+                text_index_dir=self.text_index_dir,
+                text_model_name=self.text_model_name,
+                text_embedding_dim=self.text_embedding_dim,
+                text_device=self.text_device,
+            )
+        result = self.__class__.searcher.search_text(query, top_k=top_k)
+        gallery_root = self.gallery_dir.resolve()
+        for match in result["matches"]:
+            gallery_url = gallery_url_for_path(Path(match["path"]), gallery_root)
+            if gallery_url:
+                match["gallery_url"] = gallery_url
+        self.send_json({"ok": True, "query": query, **result})
+
 
 def run_server(
     checkpoint: str | Path,
     gallery_dir: str | Path,
     index_dir: str | Path,
+    text_index_dir: str | Path | None,
     host: str,
     port: int,
     device: str,
     workers: int,
+    text_model_name: str = TEXT_MODEL_NAME,
+    text_embedding_dim: int = 256,
+    text_device: str = "auto",
 ) -> None:
     AnimeGirlHandler.checkpoint_path = Path(checkpoint)
     AnimeGirlHandler.gallery_dir = Path(gallery_dir)
     AnimeGirlHandler.index_dir = Path(index_dir)
+    AnimeGirlHandler.text_index_dir = Path(text_index_dir) if text_index_dir else Path(index_dir)
     AnimeGirlHandler.device = device
+    AnimeGirlHandler.text_model_name = text_model_name
+    AnimeGirlHandler.text_embedding_dim = text_embedding_dim
+    AnimeGirlHandler.text_device = text_device
     AnimeGirlHandler.workers = workers
     AnimeGirlHandler.searcher = None
 
     AnimeGirlHandler.gallery_dir.mkdir(parents=True, exist_ok=True)
     AnimeGirlHandler.index_dir.mkdir(parents=True, exist_ok=True)
+    AnimeGirlHandler.text_index_dir.mkdir(parents=True, exist_ok=True)
 
     server = ThreadingHTTPServer((host, port), AnimeGirlHandler)
     print(f"Serving Who Is This Anime Girl at http://{host}:{port}")
@@ -248,9 +334,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", required=True, help="Path to a trained checkpoint.")
     parser.add_argument("--gallery-dir", default="data/gallery", help="ImageFolder gallery directory.")
     parser.add_argument("--index-dir", default="artifacts/gallery_index", help="Directory containing the FAISS gallery index.")
+    parser.add_argument("--text-index-dir", default=None, help="Optional DeViSE text-space FAISS index for text queries.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--text-model", default=TEXT_MODEL_NAME)
+    parser.add_argument("--text-embedding-dim", type=int, default=256)
+    parser.add_argument("--text-device", default="auto")
     parser.add_argument("--workers", type=int, default=2)
     return parser.parse_args()
 
@@ -261,9 +351,13 @@ def main() -> None:
         checkpoint=args.checkpoint,
         gallery_dir=args.gallery_dir,
         index_dir=args.index_dir,
+        text_index_dir=args.text_index_dir,
         host=args.host,
         port=args.port,
         device=args.device,
+        text_model_name=args.text_model,
+        text_embedding_dim=args.text_embedding_dim,
+        text_device=args.text_device,
         workers=args.workers,
     )
 

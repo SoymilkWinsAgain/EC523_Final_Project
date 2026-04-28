@@ -6,12 +6,36 @@ from typing import Any
 
 import faiss
 import numpy as np
+import torch
+from torch import nn
 from torch.utils.data import DataLoader
 
 from .data import make_dataset
+from .devise import load_devise_checkpoint
 from .metrics import extract_embeddings
 from .model import load_checkpoint
 from .utils import resolve_device, write_json
+
+
+class _OutputKeyModel(nn.Module):
+    def __init__(self, model: nn.Module, output_key: str) -> None:
+        super().__init__()
+        self.model = model
+        self.output_key = output_key
+
+    def forward(self, images):
+        outputs = self.model(images)
+        if self.output_key not in outputs:
+            raise KeyError(f"Model output does not contain {self.output_key!r}")
+        return {"embedding": outputs[self.output_key]}
+
+
+def _load_embedding_model(checkpoint_path: Path, torch_device):
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if checkpoint.get("checkpoint_type") == "devise_frozen_image_transform_v1":
+        model, loaded_checkpoint = load_devise_checkpoint(checkpoint_path, map_location=torch_device)
+        return _OutputKeyModel(model, "image_embedding"), loaded_checkpoint
+    return load_checkpoint(checkpoint_path, map_location=torch_device)
 
 
 def build_gallery_index(
@@ -32,10 +56,11 @@ def build_gallery_index(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     torch_device = resolve_device(device)
-    model, checkpoint = load_checkpoint(checkpoint_path, map_location=torch_device)
+    model, checkpoint = _load_embedding_model(checkpoint_path, torch_device)
     model.to(torch_device)
 
     run_config = checkpoint.get("run_config", {})
+    checkpoint_type = checkpoint.get("checkpoint_type", "image_embedding_checkpoint")
     resolved_image_size = int(image_size or run_config.get("image_size", 224))
     resolved_image_mean = image_mean or run_config.get("image_mean", [0.485, 0.456, 0.406])
     resolved_image_std = image_std or run_config.get("image_std", [0.229, 0.224, 0.225])
@@ -69,6 +94,9 @@ def build_gallery_index(
         )
 
     metadata = {
+        "index_type": "image_embedding_space",
+        "embedding_space": "image",
+        "source_checkpoint_type": checkpoint_type,
         "checkpoint": str(checkpoint_path.resolve()),
         "gallery_dir": str(gallery_dir.resolve()) if gallery_dir else None,
         "gallery_manifest": str(Path(gallery_manifest).resolve()) if gallery_manifest else None,

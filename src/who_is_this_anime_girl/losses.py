@@ -25,3 +25,17 @@ def supervised_contrastive_loss(embeddings: torch.Tensor, labels: torch.Tensor, 
 
     mean_log_prob = (positive_mask * log_prob).sum(dim=1) / positives_per_anchor.clamp_min(1.0)
     return -mean_log_prob[valid].mean()
+
+
+def symmetric_image_text_contrastive_loss(
+    image_embeddings: torch.Tensor,
+    text_embeddings: torch.Tensor,
+    logit_scale: torch.Tensor,
+) -> torch.Tensor:
+    image_embeddings = F.normalize(image_embeddings, dim=1)
+    text_embeddings = F.normalize(text_embeddings, dim=1)
+    logits = logit_scale.exp().clamp(max=100.0) * image_embeddings @ text_embeddings.T
+    labels = torch.arange(logits.shape[0], device=logits.device)
+    image_to_text = F.cross_entropy(logits, labels)
+    text_to_image = F.cross_entropy(logits.T, labels)
+    return 0.5 * (image_to_text + text_to_image)

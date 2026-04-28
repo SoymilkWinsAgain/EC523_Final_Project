@@ -2,8 +2,10 @@ const statusText = document.querySelector("#statusText");
 const refreshStatus = document.querySelector("#refreshStatus");
 const enrollForm = document.querySelector("#enrollForm");
 const queryForm = document.querySelector("#queryForm");
+const textQueryForm = document.querySelector("#textQueryForm");
 const enrollResult = document.querySelector("#enrollResult");
 const queryResult = document.querySelector("#queryResult");
+const textQueryResult = document.querySelector("#textQueryResult");
 const rebuildIndex = document.querySelector("#rebuildIndex");
 const identityList = document.querySelector("#identityList");
 const matches = document.querySelector("#matches");
@@ -15,6 +17,32 @@ function setBusy(element, busy) {
 function showMessage(element, text, isError = false) {
   element.textContent = text;
   element.classList.toggle("error", isError);
+}
+
+function renderMatches(data, targetResult) {
+  if (data.matches.length === 0) {
+    showMessage(targetResult, "No matches found.");
+    return;
+  }
+  const mode = data.mode ? ` (${data.mode})` : "";
+  showMessage(targetResult, `Found ${data.matches.length} match(es)${mode}.`);
+  for (const match of data.matches) {
+    const card = document.createElement("article");
+    card.className = "match-card";
+    const image = document.createElement("img");
+    image.alt = match.identity;
+    image.src = match.gallery_url || "";
+    const detail = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = match.identity;
+    const score = document.createElement("span");
+    score.textContent = `Similarity: ${match.score.toFixed(4)}`;
+    const path = document.createElement("span");
+    path.textContent = match.path;
+    detail.append(title, score, path);
+    card.append(image, detail);
+    matches.appendChild(card);
+  }
 }
 
 async function readJson(response) {
@@ -89,32 +117,27 @@ queryForm.addEventListener("submit", async (event) => {
   try {
     const formData = new FormData(queryForm);
     const data = await fetch("/api/query", { method: "POST", body: formData }).then(readJson);
-    if (data.matches.length === 0) {
-      showMessage(queryResult, "No matches found.");
-      return;
-    }
-    showMessage(queryResult, `Found ${data.matches.length} match(es).`);
-    for (const match of data.matches) {
-      const card = document.createElement("article");
-      card.className = "match-card";
-      const image = document.createElement("img");
-      image.alt = match.identity;
-      image.src = match.gallery_url || "";
-      const detail = document.createElement("div");
-      const title = document.createElement("strong");
-      title.textContent = match.identity;
-      const score = document.createElement("span");
-      score.textContent = `Similarity: ${match.score.toFixed(4)}`;
-      const path = document.createElement("span");
-      path.textContent = match.path;
-      detail.append(title, score, path);
-      card.append(image, detail);
-      matches.appendChild(card);
-    }
+    renderMatches(data, queryResult);
   } catch (error) {
     showMessage(queryResult, error.message, true);
   } finally {
     setBusy(queryForm.querySelector("button[type='submit']"), false);
+  }
+});
+
+textQueryForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setBusy(textQueryForm.querySelector("button[type='submit']"), true);
+  showMessage(textQueryResult, "Searching...");
+  matches.innerHTML = "";
+  try {
+    const formData = new FormData(textQueryForm);
+    const data = await fetch("/api/query_text", { method: "POST", body: formData }).then(readJson);
+    renderMatches(data, textQueryResult);
+  } catch (error) {
+    showMessage(textQueryResult, error.message, true);
+  } finally {
+    setBusy(textQueryForm.querySelector("button[type='submit']"), false);
   }
 });
 
