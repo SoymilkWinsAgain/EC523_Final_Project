@@ -10,6 +10,10 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 import yaml
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 
 from .data import make_dataset
@@ -63,6 +67,46 @@ def write_csv(path: str | Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=ordered)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def plot_comparison_bars(output_dir: str | Path, rows: list[dict[str, Any]]) -> None:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        return
+
+    names = [str(row["name"]) for row in rows]
+    recall_keys = [key for key in ["recall@1", "recall@5", "recall@10"] if any(key in row for row in rows)]
+    if recall_keys:
+        x_positions = list(range(len(names)))
+        width = 0.22
+        plt.figure(figsize=(10, 5.6))
+        for offset, key in enumerate(recall_keys):
+            values = [float(row.get(key, 0.0)) for row in rows]
+            positions = [x + (offset - (len(recall_keys) - 1) / 2) * width for x in x_positions]
+            plt.bar(positions, values, width=width, label=key)
+        plt.xticks(x_positions, names, rotation=15, ha="right")
+        plt.ylim(0.0, 1.0)
+        plt.ylabel("Recall")
+        plt.title("Retrieval Recall Comparison")
+        plt.grid(axis="y", alpha=0.25)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(output_dir / "comparison_recall.png", dpi=180)
+        plt.close()
+
+    if any("mrr" in row for row in rows):
+        plt.figure(figsize=(8, 5.2))
+        values = [float(row.get("mrr", 0.0)) for row in rows]
+        plt.bar(names, values, color="#0f766e")
+        plt.ylim(0.0, 1.0)
+        plt.ylabel("MRR")
+        plt.title("Retrieval MRR Comparison")
+        plt.grid(axis="y", alpha=0.25)
+        plt.xticks(rotation=15, ha="right")
+        plt.tight_layout()
+        plt.savefig(output_dir / "comparison_mrr.png", dpi=180)
+        plt.close()
 
 
 def default_model_from_args(args: argparse.Namespace) -> dict[str, Any]:
@@ -219,6 +263,7 @@ def main() -> None:
         output_path = Path(output_dir)
         write_json(output_path / "comparison_metrics.json", rows)
         write_csv(output_path / "comparison_metrics.csv", rows)
+        plot_comparison_bars(output_path, rows)
 
 
 if __name__ == "__main__":

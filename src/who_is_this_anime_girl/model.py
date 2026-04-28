@@ -106,12 +106,12 @@ class TransformersBackbone(nn.Module):
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         outputs = self.model(pixel_values=images)
-        pooler_output = getattr(outputs, "pooler_output", None)
-        if pooler_output is not None:
-            return pooler_output
         last_hidden_state = getattr(outputs, "last_hidden_state", None)
         if last_hidden_state is not None:
             return last_hidden_state[:, 0]
+        pooler_output = getattr(outputs, "pooler_output", None)
+        if pooler_output is not None:
+            return pooler_output
         if isinstance(outputs, tuple) and outputs:
             value = outputs[0]
             return value[:, 0] if value.ndim == 3 else value

@@ -62,7 +62,7 @@ def build_gallery_index(
         items.append(
             {
                 "index": sample_index,
-                "path": str(Path(path).resolve()),
+                "path": str(Path(path).absolute()),
                 "identity": idx_to_class[int(label)],
                 "label": int(label),
             }

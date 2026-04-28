@@ -14,7 +14,7 @@ from PIL import Image
 
 from .data import count_images_by_identity
 from .index import build_gallery_index
-from .infer import search_image_bytes
+from .infer import CachedGallerySearcher
 
 
 STATIC_DIR = Path(__file__).with_name("static")
@@ -33,12 +33,28 @@ def is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
+def gallery_url_for_path(path: Path, gallery_root: Path) -> str | None:
+    gallery_root_absolute = gallery_root.absolute()
+    path_absolute = path.absolute()
+    try:
+        relative = path_absolute.relative_to(gallery_root_absolute)
+        return "/gallery/" + str(relative).replace("\\", "/")
+    except ValueError:
+        pass
+
+    path_resolved = path.resolve()
+    if is_relative_to(path_resolved, gallery_root):
+        return "/gallery/" + str(path_resolved.relative_to(gallery_root.resolve())).replace("\\", "/")
+    return None
+
+
 class AnimeGirlHandler(BaseHTTPRequestHandler):
     checkpoint_path: Path
     gallery_dir: Path
     index_dir: Path
     device: str
     workers: int
+    searcher: CachedGallerySearcher | None = None
 
     def log_message(self, format: str, *args) -> None:
         print(f"{self.address_string()} - {format % args}")
@@ -80,8 +96,10 @@ class AnimeGirlHandler(BaseHTTPRequestHandler):
             return
         if route.startswith("/gallery/"):
             relative = unquote(route.removeprefix("/gallery/"))
-            gallery_path = (self.gallery_dir / relative).resolve()
-            if not is_relative_to(gallery_path, self.gallery_dir):
+            gallery_path = (self.gallery_dir / relative).absolute()
+            try:
+                gallery_path.relative_to(self.gallery_dir.absolute())
+            except ValueError:
                 self.send_error(403)
                 return
             self.serve_file(gallery_path)
@@ -122,6 +140,7 @@ class AnimeGirlHandler(BaseHTTPRequestHandler):
                 "checkpoint": str(self.checkpoint_path),
                 "gallery_dir": str(self.gallery_dir),
                 "index_dir": str(self.index_dir),
+                "searcher_cached": self.__class__.searcher is not None,
                 "identities": count_images_by_identity(self.gallery_dir),
             }
         )
@@ -162,6 +181,11 @@ class AnimeGirlHandler(BaseHTTPRequestHandler):
             workers=self.workers,
             device=self.device,
         )
+        self.__class__.searcher = CachedGallerySearcher(
+            checkpoint_path=self.checkpoint_path,
+            index_dir=self.index_dir,
+            device=self.device,
+        )
         self.send_json({"ok": True, "indexed_images": len(metadata["items"])})
 
     def handle_query(self) -> None:
@@ -179,18 +203,18 @@ class AnimeGirlHandler(BaseHTTPRequestHandler):
         image_field = form["image"]
         image_bytes = image_field.file.read()
         top_k = int(form.getfirst("top_k", "5"))
-        matches = search_image_bytes(
-            checkpoint_path=self.checkpoint_path,
-            index_dir=self.index_dir,
-            image_bytes=image_bytes,
-            top_k=top_k,
-            device=self.device,
-        )
+        if self.__class__.searcher is None:
+            self.__class__.searcher = CachedGallerySearcher(
+                checkpoint_path=self.checkpoint_path,
+                index_dir=self.index_dir,
+                device=self.device,
+            )
+        matches = self.__class__.searcher.search_bytes(image_bytes, top_k=top_k)
         gallery_root = self.gallery_dir.resolve()
         for match in matches:
-            match_path = Path(match["path"]).resolve()
-            if is_relative_to(match_path, gallery_root):
-                match["gallery_url"] = "/gallery/" + str(match_path.relative_to(gallery_root)).replace("\\", "/")
+            gallery_url = gallery_url_for_path(Path(match["path"]), gallery_root)
+            if gallery_url:
+                match["gallery_url"] = gallery_url
         self.send_json({"ok": True, "matches": matches})
 
 
@@ -208,6 +232,7 @@ def run_server(
     AnimeGirlHandler.index_dir = Path(index_dir)
     AnimeGirlHandler.device = device
     AnimeGirlHandler.workers = workers
+    AnimeGirlHandler.searcher = None
 
     AnimeGirlHandler.gallery_dir.mkdir(parents=True, exist_ok=True)
     AnimeGirlHandler.index_dir.mkdir(parents=True, exist_ok=True)
