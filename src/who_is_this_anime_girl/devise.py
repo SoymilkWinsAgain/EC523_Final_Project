@@ -72,23 +72,30 @@ def _tag_names(record: dict[str, Any], key: str) -> list[str]:
     return [str(item) for item in value or [] if item]
 
 
+TEXT_DOCUMENT_VERSION = "anime_visual_document_v2"
+
+
 def build_devise_document_text(record: dict[str, Any], include_character: bool = False) -> str:
-    parts: list[str] = []
+    parts: list[str] = ["Anime image description."]
+
     characters = _tag_names(record, "character")
     copyrights = _tag_names(record, "copyright")
     artists = _tag_names(record, "artist")
     general = _tag_names(record, "general")
+
     if include_character and characters:
-        parts.append("character: " + ", ".join(preprocess_tag(tag) for tag in characters))
+        parts.append("Character name: " + ", ".join(preprocess_tag(tag) for tag in characters[:2]) + ".")
     if copyrights:
-        parts.append("copyright: " + ", ".join(preprocess_tag(tag) for tag in copyrights[:8]))
+        parts.append("Series or source: " + ", ".join(preprocess_tag(tag) for tag in copyrights[:8]) + ".")
     if artists:
-        parts.append("artist: " + ", ".join(preprocess_tag(tag) for tag in artists[:2]))
+        parts.append("Artist: " + ", ".join(preprocess_tag(tag) for tag in artists[:2]) + ".")
     if general:
-        parts.append("tags: " + ", ".join(preprocess_tag(tag) for tag in general[:32]))
-    text = ". ".join(parts).strip()
-    if text:
-        return text + "."
+        parts.append("Visible attributes: " + ", ".join(preprocess_tag(tag) for tag in general[:32]) + ".")
+
+    text = " ".join(parts).strip()
+    if text != "Anime image description.":
+        return text
+
     original = str(record.get("text") or "")
     return re.sub(r"(^|\.\s*)character:\s*[^.]+\.?\s*", " ", original, flags=re.IGNORECASE).strip() or original
 
