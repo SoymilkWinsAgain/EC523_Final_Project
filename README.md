@@ -4,12 +4,35 @@ This repository implements an image-only anime character retrieval system. It tr
 
 ## Technology Stack
 
-- Python environment: `jigsaw`
+- Python environment: dedicated conda environment `wiag`
 - Modeling: PyTorch, torchvision, timm
 - Hugging Face loading: transformers, huggingface_hub, peft
 - Retrieval: FAISS with cosine similarity through normalized embeddings
 - Web UI: Python standard library HTTP server plus static HTML/CSS/JavaScript
 - Dataset format: ImageFolder directories or JSONL manifests aligned with Danbooru2021 bucketed files
+
+## Environment Setup
+
+Use the dedicated project environment `wiag` instead of reusing an older shared environment:
+
+```bash
+conda create -y -n wiag python=3.11 pip
+conda run -n wiag python -m pip install --upgrade pip
+conda run -n wiag python -m pip install -r requirements.txt
+conda run -n wiag python -m pip install -e .
+```
+
+`requirements.txt` covers the core image retrieval pipeline, Hugging Face fine-tuning, FAISS indexing, the DeVISE text-to-image extension, and the legacy Danbooru helper scripts under `ExtraScripts/`.
+The PyTorch entries are pinned to the CUDA 12.8 wheel index to match the environment used for the current experiments. On a CPU-only machine, replace the PyTorch/torchvision install with the CPU wheel instructions from PyTorch before installing the rest of the file.
+
+Quick smoke check:
+
+```bash
+conda run -n wiag python -c "import torch, torchvision, timm, transformers, faiss, sentence_transformers; print(torch.__version__)"
+conda run -n wiag python scripts/train.py --help
+conda run -n wiag python scripts/build_index.py --help
+conda run -n wiag python scripts/query_text.py --help
+```
 
 ## Project Layout
 
@@ -57,7 +80,7 @@ Danbooru2021 stores images in modulo buckets. For image ID `1001`, the bucket is
 Do not download the full dataset into this repository. Point the script at an existing SCC or external dataset location:
 
 ```bash
-conda run -n jigsaw python scripts/prepare_danbooru.py \
+conda run -n wiag python scripts/prepare_danbooru.py \
   --metadata /path/to/metadata.json.tar.xz \
   --image-root /path/to/danbooru2021 \
   --image-subdir 512px \
@@ -77,7 +100,7 @@ The script writes `train.jsonl`, `val.jsonl`, `test.jsonl`, `all.jsonl`, and `su
 Run from the repository root:
 
 ```bash
-conda run -n jigsaw python scripts/train.py \
+conda run -n wiag python scripts/train.py \
   --config configs/default.yaml \
   --train-dir data/train \
   --val-dir data/val \
@@ -87,7 +110,7 @@ conda run -n jigsaw python scripts/train.py \
 Useful SCC overrides:
 
 ```bash
-conda run -n jigsaw python scripts/train.py \
+conda run -n wiag python scripts/train.py \
   --train-dir /path/to/train \
   --val-dir /path/to/val \
   --output-dir /path/to/run \
@@ -112,7 +135,7 @@ It also writes report-ready artifacts:
 Scheduler options include `none`, `cosine`, `cosine-warmup`, `step`, and `multistep`:
 
 ```bash
-conda run -n jigsaw python scripts/train.py \
+conda run -n wiag python scripts/train.py \
   --config configs/default.yaml \
   --scheduler cosine-warmup \
   --warmup-epochs 2 \
@@ -122,7 +145,7 @@ conda run -n jigsaw python scripts/train.py \
 Manifest-based Danbooru training:
 
 ```bash
-conda run -n jigsaw python scripts/train.py \
+conda run -n wiag python scripts/train.py \
   --config configs/hf_vit_lora.yaml \
   --train-manifest data/manifests/danbooru/train.jsonl \
   --val-manifest data/manifests/danbooru/val.jsonl
@@ -142,12 +165,12 @@ Supported loader backends:
 Examples:
 
 ```bash
-conda run -n jigsaw python scripts/train.py \
+conda run -n wiag python scripts/train.py \
   --config configs/dinov3_lora.yaml \
   --train-manifest data/manifests/danbooru/train.jsonl \
   --val-manifest data/manifests/danbooru/val.jsonl
 
-conda run -n jigsaw python scripts/train.py \
+conda run -n wiag python scripts/train.py \
   --config configs/uni_full.yaml \
   --train-manifest data/manifests/danbooru/train.jsonl \
   --val-manifest data/manifests/danbooru/val.jsonl
@@ -158,7 +181,7 @@ Some Hugging Face models are gated. Authenticate with `huggingface-cli login` or
 LVFace is distributed on Hugging Face as project-specific `.pt` and `.onnx` artifacts rather than a standard timm or transformers model. Use the downloader to fetch selected files without downloading the whole repository:
 
 ```bash
-conda run -n jigsaw python scripts/download_hf.py \
+conda run -n wiag python scripts/download_hf.py \
   --repo-id bytedance-research/LVFace \
   --filename LVFace-B_Glint360K/LVFace-B_Glint360K.pt \
   --output-dir artifacts/hf_models/lvface
@@ -169,7 +192,7 @@ Fine-tuning LVFace requires the upstream LVFace architecture code. The current t
 ## Build a Gallery Index
 
 ```bash
-conda run -n jigsaw python scripts/build_index.py \
+conda run -n wiag python scripts/build_index.py \
   --checkpoint runs/vit_baseline/best.pt \
   --gallery-dir data/gallery \
   --output-dir artifacts/gallery_index
@@ -178,7 +201,7 @@ conda run -n jigsaw python scripts/build_index.py \
 Manifest-based gallery indexing:
 
 ```bash
-conda run -n jigsaw python scripts/build_index.py \
+conda run -n wiag python scripts/build_index.py \
   --checkpoint runs/hf_vit_lora/best.pt \
   --gallery-manifest data/manifests/danbooru/all.jsonl \
   --output-dir artifacts/danbooru_index
@@ -187,7 +210,7 @@ conda run -n jigsaw python scripts/build_index.py \
 ## Query from the Command Line
 
 ```bash
-conda run -n jigsaw python scripts/query.py \
+conda run -n wiag python scripts/query.py \
   --checkpoint runs/vit_baseline/best.pt \
   --index-dir artifacts/gallery_index \
   --image /path/to/query.jpg \
@@ -199,7 +222,7 @@ conda run -n jigsaw python scripts/query.py \
 Use `scripts/evaluate.py` to run the same retrieval protocol across multiple model variants:
 
 ```bash
-conda run -n jigsaw python scripts/evaluate.py \
+conda run -n wiag python scripts/evaluate.py \
   --spec configs/compare_example.yaml
 ```
 
@@ -233,7 +256,7 @@ Outputs are written as `comparison_metrics.json` and `comparison_metrics.csv` wh
 ## Run the Local Web UI
 
 ```bash
-conda run -n jigsaw python scripts/serve.py \
+conda run -n wiag python scripts/serve.py \
   --checkpoint runs/vit_baseline/best.pt \
   --gallery-dir data/gallery \
   --index-dir artifacts/gallery_index \

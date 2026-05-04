@@ -10,7 +10,7 @@
 set -euo pipefail
 
 source "${HOME}/miniforge3/etc/profile.d/conda.sh"
-conda activate jigsaw
+conda activate wiag
 
 DATA_ARGS=()
 if [[ -n "${TRAIN_MANIFEST:-}" ]]; then
