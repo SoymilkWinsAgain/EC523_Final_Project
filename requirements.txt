@@ -8,6 +8,9 @@ huggingface-hub==0.34.5
 peft==0.17.1
 accelerate==1.10.1
 
+# CLIP/SigLIP/OpenCLIP joint embedding experiments.
+open_clip_torch==3.3.0
+
 # Retrieval, data processing, metrics, and reporting.
 faiss-cpu==1.12.0
 numpy==2.1.2

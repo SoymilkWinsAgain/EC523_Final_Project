@@ -9,6 +9,7 @@ dependencies = [
   "huggingface-hub",
   "matplotlib",
   "numpy",
+  "open_clip_torch",
   "peft",
   "pillow",
   "pyyaml",

@@ -25,3 +25,16 @@ data/manifests/danbooru/all.jsonl
 ```
 
 The generated manifests are ignored by Git.
+
+CLIP/SigLIP/OpenCLIP joint embedding experiments use a richer image-text subset extracted from `data/archive.zip` without unpacking the full archive:
+
+```text
+data/archive.zip
+data/danbooru_clip_top500/images/<identity_name>/*.jpg
+data/manifests/danbooru_clip_top500/train.jsonl
+data/manifests/danbooru_clip_top500/val.jsonl
+data/manifests/danbooru_clip_top500/all.jsonl
+data/manifests/danbooru_clip_top500/summary.json
+```
+
+Each CLIP manifest row should include `path`, `identity`, `post_id`, structured `tags`, and `text`. The joint trainer removes character names from the training text by default and uses source, artist, and visual tags for image-text contrastive learning.

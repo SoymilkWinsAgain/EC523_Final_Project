@@ -31,8 +31,7 @@ from .utils import resolve_device, set_seed, write_json
 
 
 TEXT_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
-# QUERY_TASK = "Given a text query about anime character appearance, retrieve matching anime images."
-QUERY_TASK = "Given a text query describing an anime character's visible appearance, retrieve relevant anime image descriptions"
+QUERY_TASK = "Given a text query describing an anime character's visible appearance, retrieve relevant anime image descriptions."
 
 def preprocess_tag(value: str) -> str:
     value = str(value).replace("_", " ").replace("-", " ")
@@ -166,8 +165,12 @@ def precompute_text_embeddings(
     if not force and records_path.exists() and embeddings_path.exists() and summary_path.exists():
         embeddings = np.load(embeddings_path, mmap_mode="r")
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
-        # if embeddings.shape == (len(source_rows), embedding_dim) and summary.get("tag_preprocessing") == "underscore_to_space_v1":
-        if embeddings.shape == (len(source_rows), embedding_dim) and summary.get("tag_preprocessing") == TEXT_DOCUMENT_VERSION:
+        if (
+            embeddings.shape == (len(source_rows), embedding_dim)
+            and summary.get("tag_preprocessing") == TEXT_DOCUMENT_VERSION
+            and summary.get("include_character") == include_character
+            and summary.get("model_name") == model_name
+        ):
             summary["reused"] = True
             return summary
 
@@ -195,7 +198,6 @@ def precompute_text_embeddings(
         "embedding_dim": int(embeddings.shape[1]),
         "model_name": model_name,
         "include_character": include_character,
-        # "tag_preprocessing": "underscore_to_space_v1",
         "tag_preprocessing": TEXT_DOCUMENT_VERSION,
         "elapsed_sec": time.time() - started,
         "reused": False,
