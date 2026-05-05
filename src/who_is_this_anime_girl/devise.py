@@ -31,8 +31,8 @@ from .utils import resolve_device, set_seed, write_json
 
 
 TEXT_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
-QUERY_TASK = "Given a text query about anime character appearance, retrieve matching anime images."
-
+# QUERY_TASK = "Given a text query about anime character appearance, retrieve matching anime images."
+QUERY_TASK = "Given a text query describing an anime character's visible appearance, retrieve relevant anime image descriptions"
 
 def preprocess_tag(value: str) -> str:
     value = str(value).replace("_", " ").replace("-", " ")
@@ -98,7 +98,6 @@ def build_devise_document_text(record: dict[str, Any], include_character: bool =
 
     original = str(record.get("text") or "")
     return re.sub(r"(^|\.\s*)character:\s*[^.]+\.?\s*", " ", original, flags=re.IGNORECASE).strip() or original
-
 
 def query_instruction_text(query: str) -> str:
     return f"Instruct: {QUERY_TASK}\nQuery: {preprocess_query_text(query)}"
@@ -167,7 +166,8 @@ def precompute_text_embeddings(
     if not force and records_path.exists() and embeddings_path.exists() and summary_path.exists():
         embeddings = np.load(embeddings_path, mmap_mode="r")
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
-        if embeddings.shape == (len(source_rows), embedding_dim) and summary.get("tag_preprocessing") == "underscore_to_space_v1":
+        # if embeddings.shape == (len(source_rows), embedding_dim) and summary.get("tag_preprocessing") == "underscore_to_space_v1":
+        if embeddings.shape == (len(source_rows), embedding_dim) and summary.get("tag_preprocessing") == TEXT_DOCUMENT_VERSION:
             summary["reused"] = True
             return summary
 
@@ -195,7 +195,8 @@ def precompute_text_embeddings(
         "embedding_dim": int(embeddings.shape[1]),
         "model_name": model_name,
         "include_character": include_character,
-        "tag_preprocessing": "underscore_to_space_v1",
+        # "tag_preprocessing": "underscore_to_space_v1",
+        "tag_preprocessing": TEXT_DOCUMENT_VERSION,
         "elapsed_sec": time.time() - started,
         "reused": False,
         "norm_min": float(np.linalg.norm(embeddings, axis=1).min()),
